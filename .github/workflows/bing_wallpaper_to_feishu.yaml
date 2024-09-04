@@ -3,7 +3,7 @@ name: Daily Bing Wallpaper to Feishu
 on:
   schedule:
     - cron: '0 10 * * *'  # 每天早上10点运行
-  workflow_dispatch:  # 手动触发
+  workflow_dispatch:  # 允许手动触发
 
 jobs:
   send_bing_wallpaper:
@@ -16,69 +16,72 @@ jobs:
         python-version: '3.x'
 
     - name: Install dependencies
-      run: pip install requests
+      run: pip install requests requests-toolbelt
 
     - name: Get Bing Wallpaper and Send to Feishu
       env:
         FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-        FEISHU_ACCESS_TOKEN: ${{ secrets.FEISHU_ACCESS_TOKEN }}  # 定义飞书访问令牌
+        FEISHU_ACCESS_TOKEN: ${{ secrets.FEISHU_ACCESS_TOKEN }}
       run: |
         python - <<EOF
         import requests
         import json
         import os
+        from requests_toolbelt import MultipartEncoder
+        from typing import Optional, Tuple
 
         FEISHU_WEBHOOK_URL = os.getenv('FEISHU_WEBHOOK_URL')
         FEISHU_ACCESS_TOKEN = os.getenv('FEISHU_ACCESS_TOKEN')
-        BING_URL = 'https://www.bing.com'
+        BING_URL = 'https://bing.com'
         BING_API = f'{BING_URL}/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=zh-CN'
 
-        def get_bing_wallpaper():
+        def get_bing_wallpaper() -> Tuple[Optional[str], Optional[str], Optional[str]]:
             response = requests.get(BING_API)
             data = response.json()
             if data and 'images' in data:
                 image_info = data['images'][0]
                 image_url = BING_URL + image_info['url']
                 image_description = image_info.get('copyright', 'Bing Daily Wallpaper')
-                return image_url, image_description
-            return None, None
+                image_title = image_info.get('title', '🔖今日必应壁纸')
+                return image_url, image_description, image_title
+            print('No wallpaper found')
+            return None, None, None
 
-        def upload_image_to_feishu(image_url):
-            # 下载图片
+        def upload_image(image_url: str) -> Optional[str]:
+            url = "https://open.feishu.cn/open-apis/im/v1/images"
             image_data = requests.get(image_url).content
-            
-            # 将图片上传到飞书，获取 image_key
-            upload_url = 'https://open.feishu.cn/open-apis/im/v1/images'
+            form = {'image_type': 'message',
+                    'image': image_data}  
+            multi_form = MultipartEncoder(form)
             headers = {
-                'Authorization': f'Bearer {FEISHU_ACCESS_TOKEN}',
-                'Content-Type': 'multipart/form-data'
+                'Authorization': f'Bearer {FEISHU_ACCESS_TOKEN}',  
             }
-            files = {'image': ('wallpaper.jpg', image_data)}
-            response = requests.post(upload_url, headers=headers, files=files)
+            headers['Content-Type'] = multi_form.content_type
+            response = requests.post(url, headers=headers, data=multi_form)
             image_key = response.json().get('data', {}).get('image_key')
             return image_key
 
-        def send_to_feishu(image_url, image_description):
+        def send_to_feishu(image_url: str, image_description: str, image_title: str) -> dict:
             headers = {
                 'Content-Type': 'application/json'
             }
-            image_key = upload_image_to_feishu(image_url)
+            image_key = upload_image(image_url)
             data = {
                 "msg_type": "post",
                 "content": {
                     "post": {
                         "zh_cn": {
-                            "title": "今日必应壁纸",
+                            "title": f'🔖{image_title}',
                             "content": [
                                 [
                                     {
-                                        "tag": "text",
-                                        "text": f"{image_description}\n"
-                                    },
-                                    {
                                         "tag": "img",
                                         "image_key": image_key
-                                    }
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "text": f"📝{image_description}"
+                                    },
                                 ]
                             ]
                         }
@@ -89,9 +92,9 @@ jobs:
             return response.json()
 
         # 获取今天的必应壁纸
-        wallpaper_url, wallpaper_description = get_bing_wallpaper()
+        wallpaper_url, wallpaper_description, wallpaper_title = get_bing_wallpaper()
 
         if wallpaper_url:
             # 发送壁纸和描述文本到飞书
-            send_to_feishu(wallpaper_url, wallpaper_description)
+            send_to_feishu(wallpaper_url, wallpaper_description, wallpaper_title)
         EOF
